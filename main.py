@@ -5,7 +5,7 @@ from typing import List, Optional, Dict, Any
 import pandas as pd
 import uuid
 from app.agents import workflow_app, AgentState
-from app.utils import get_retriever_tool
+from app.utils import get_retriever_local
 from typing import List, Optional, TypedDict, List, Dict, Any, Union, Annotated
 import logging
 import os
@@ -44,22 +44,34 @@ async def answer_question(
         except json.JSONDecodeError:
             raise HTTPException(400, "Invalid JSON format in table file")
         
-        if not all(key in table_data for key in ['question', 'table']):
+        if not all(key in table_data for key in ['question']):
             raise HTTPException(400, "Table file missing required fields")
+
+        if 'table' not in table_data:
+            retriever = await get_retriever_local()
+            tables = await retriever.aget_relevant_documents(table_data['question'])
+            table_data['table'] = tables[0]['table']
+            table_data['table_id'] = tables[0]['table_id']
+        
 
         logger.info(f"Processing query: {table_data['question'][:50]}... (table: {table_data['table_id']})")
 
-        df = pd.DataFrame(np.array(table_data['table']['data']).reshape(len(table_data['table']['data']) // len(table_data['table']['header']), len(table_data['table']['header'])))
-        df.columns = table_data['table']['header']
+        table = table_data['table']
+        data = np.array(table['data'])
+        n_cols = len(table['header'])
+        df = pd.DataFrame(data.reshape(-1, n_cols), columns=table['header'])
+
+        #df = pd.DataFrame(np.array(table_data['table']['data']).reshape(len(table_data['table']['data']) // len(table_data['table']['header']), len(table_data['table']['header'])))
+        #df.columns = table_data['table']['header']
         table_data['table']['data'] = df
-        table_data['table']['table_id'] = table_data['table_id'] # oops!
+        table_data['table']['table_id'] = table_data['table_id']
 
         state = {
             "input": table_data['question'],
             'table_data': table_data['table'],
             'metadata': {
-                'url': table_data['table'].get('url'),
-                'title': table_data['table'].get('title')
+                'url': table_data['table'].get('url', ''),
+                'title': table_data['table'].get('title', '')
             },
             "subtasks": [],
             "current_index": -1,
@@ -89,16 +101,17 @@ async def answer_question(
             ],
             trace=final_state["trace"]
         )
-
-    except ValueError as ve:
-        logger.error(f"Validation error: {str(ve)}")
-        raise HTTPException(400, detail=str(ve))
     except RuntimeError as re:
         logger.error(f"Processing failure: {str(re)}")
         raise HTTPException(500, detail=str(re))
+    '''
+    except ValueError as ve:
+        logger.error(f"Validation error: {str(ve)}")
+        raise HTTPException(400, detail=str(ve))
     except Exception as e:
         logger.exception("Unexpected error")
         raise HTTPException(500, detail=f"Internal server error: {str(e)}")
+    '''
 
 if __name__ == "__main__":
     chroma_db_path ="./app/chroma_data"

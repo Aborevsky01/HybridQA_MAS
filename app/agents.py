@@ -112,7 +112,7 @@ async def table_node(state: AgentState) -> dict:
     agent = create_pandas_dataframe_agent(
         llm, df, agent_type='tool-calling', allow_dangerous_code=True,
         verbose=False, agent_executor_kwargs={"handle_parsing_errors": True}, 
-        max_iterations=10,  
+        max_iterations=2,  
     )
     logger.info(f'Node: Table {current_idx+1}. Task: {current_task}')
 

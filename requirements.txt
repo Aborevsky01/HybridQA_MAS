@@ -18,3 +18,6 @@ datasets
 rank_bm25
 python-multipart==0.0.9
 tabulate
+bs4
+huggingface-hub==0.20.0
+datasets==2.16.0

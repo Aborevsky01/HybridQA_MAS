@@ -13,6 +13,16 @@ from tqdm import tqdm
 from langchain_core.documents import Document
 import json
 import re
+import asyncio
+from datasets import load_dataset
+from langchain_core.vectorstores import InMemoryVectorStore
+from langchain_openai import OpenAIEmbeddings
+from langchain_core.retrievers import BaseRetriever
+import pickle
+from typing_extensions import List, Dict, Optional, Any
+from langchain_core.callbacks import CallbackManagerForRetrieverRun, AsyncCallbackManagerForRetrieverRun
+
+
 
 def process_func(x):
     """Extract Wikipedia URLs from table cells"""
@@ -120,3 +130,97 @@ def get_retriever_tool(table_id: str, df: pd.DataFrame):
         "retrieve_wikipedia_passages",
         "Searches Wikipedia passages for additional context"
     )
+
+_retriever = None
+_retriever_lock = asyncio.Lock()
+
+class TableRetriever(BaseRetriever):
+    """Retriever that returns tables with their IDs"""
+    table_map: Dict
+    retriever: BaseRetriever
+    
+    def _get_relevant_documents(self, query: str) -> List[Dict]:
+        docs = self.retriever.get_relevant_documents(query)
+        results = []
+        for d in docs:
+            table = self.table_map[d.page_content]
+            results.append({
+                "table_id": d.page_content,
+                "table": table
+            })
+        return results
+    
+    async def aget_relevant_documents(self, query: str) -> List[Dict]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._get_relevant_documents, query)
+
+async def _process_chunk(chunk):
+    """Process a chunk of dataset rows"""
+    local_tables = {}
+    for example in chunk:
+        table_id = example['table_id']
+        if table_id not in local_tables:
+            table = example['table']
+            table['table_id'] = table_id
+            local_tables[table_id] = table
+    return local_tables
+
+async def extract_unique_tables(dataset, chunk_size=1000):
+    """Async processing to extract unique tables with IDs"""
+    n = len(dataset)
+    chunks = [dataset.select(range(i, min(i+chunk_size, n))) for i in range(0, n, chunk_size)]
+    results = await asyncio.gather(*[_process_chunk(chunk) for chunk in chunks])
+    
+    unique_tables = {}
+    for res in results:
+        unique_tables.update(res)
+    return unique_tables
+
+async def build_retriever():
+    """Build and cache the retriever"""
+    global _retriever
+    
+    # Load dataset
+    dataset = load_dataset("wenhu/hybrid_qa", split='train')
+    unique_tables = await extract_unique_tables(dataset)
+    
+    documents = []
+    for table_id, _ in unique_tables.items():
+        documents.append(Document(
+            page_content=table_id,
+            #metadata={"table": table}
+        ))
+    
+    # Create vector store with OpenAI embeddings
+    embeddings = OpenAIEmbeddings()
+    vector_store = InMemoryVectorStore.from_documents(documents, embeddings)
+    vector_store.dump("./table_id_vectors")
+    
+    # Save table mapping
+    with open("table_map.pkl", "wb") as f:
+        pickle.dump(unique_tables, f)
+    
+    # Create and cache retriever
+    _retriever = TableRetriever(table_map=unique_tables, retriever=vector_store.as_retriever(search_kwargs={"k": 1}))
+    return _retriever
+
+async def get_retriever_local():
+    """Get or create the retriever instance"""
+    global _retriever
+    if _retriever is not None:
+        return _retriever
+    
+    async with _retriever_lock:
+        if _retriever is not None:
+            return _retriever
+        
+        # Check for existing retriever artifacts
+        if os.path.exists("./table_id_vectors") and os.path.exists("./table_map.pkl"):
+            embeddings = OpenAIEmbeddings()
+            vector_store = InMemoryVectorStore.load("table_id_vectors", embeddings)
+            with open("table_map.pkl", "rb") as f:
+                table_map = pickle.load(f)
+            _retriever = TableRetriever(table_map=table_map, retriever=vector_store.as_retriever(search_kwargs={"k": 1}))
+        else:
+            _retriever = await build_retriever()
+    return _retriever

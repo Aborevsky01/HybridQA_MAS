@@ -11,7 +11,7 @@ COPY requirements.txt .
 RUN pip3.9 install --no-cache-dir -r requirements.txt
 
 COPY app ./app
-COPY main.py .
+COPY main.py table_map.pkl table_id_vectors .
 
 ENV PYTHONPATH=/app
 ENV CHROMA_DB_PATH=/app/chroma_data
