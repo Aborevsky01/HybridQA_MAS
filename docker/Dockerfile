@@ -13,9 +13,9 @@ RUN pip3.9 install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY main.py .
 
-# Use shell commands to check and copy files
-RUN if [ -f ../table_map.pkl ]; then cp ../table_map.pkl .; fi && \
-    if [ -f ../table_id_vectors ]; then cp ../table_id_vectors .; fi
+COPY table_map.pkl* table_id_vectors* ./
+RUN ls table_map.pkl 2>/dev/null || echo "table_map.pkl not found" && \
+    ls table_id_vectors 2>/dev/null || echo "table_id_vectors not found"
 
 ENV PYTHONPATH=/app
 ENV CHROMA_DB_PATH=/app/chroma_data

@@ -180,7 +180,6 @@ async def build_retriever():
     """Build and cache the retriever"""
     global _retriever
     
-    # Load dataset
     dataset = load_dataset("wenhu/hybrid_qa", split='train')
     unique_tables = await extract_unique_tables(dataset)
     
@@ -191,16 +190,13 @@ async def build_retriever():
             #metadata={"table": table}
         ))
     
-    # Create vector store with OpenAI embeddings
     embeddings = OpenAIEmbeddings()
     vector_store = InMemoryVectorStore.from_documents(documents, embeddings)
     vector_store.dump("./table_id_vectors")
     
-    # Save table mapping
     with open("table_map.pkl", "wb") as f:
         pickle.dump(unique_tables, f)
     
-    # Create and cache retriever
     _retriever = TableRetriever(table_map=unique_tables, retriever=vector_store.as_retriever(search_kwargs={"k": 1}))
     return _retriever
 
@@ -214,7 +210,7 @@ async def get_retriever_local():
         if _retriever is not None:
             return _retriever
         
-        # Check for existing retriever artifacts
+        import os
         if os.path.exists("./table_id_vectors") and os.path.exists("./table_map.pkl"):
             embeddings = OpenAIEmbeddings()
             vector_store = InMemoryVectorStore.load("table_id_vectors", embeddings)
